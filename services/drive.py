@@ -1,114 +1,70 @@
 """
-Google Drive + Google Sheets integration.
-Files uploaded to owner's Drive folder (not service account storage).
+Google Sheets logging + Telegram file storage.
+Files stored on Telegram servers (free, unlimited).
+Admin can access files via Telegram links in Sheets.
 """
 import os
 import io
 import json
-import mimetypes
 from datetime import datetime
 
-SPREADSHEET_ID  = os.getenv("GOOGLE_SHEETS_ID", "")
-DRIVE_FOLDER    = "TeacherBot_Submissions"
-PARENT_FOLDER_ID = "1IngrYBU-kSdok8Oudf6-GoYO1vE3T1UJ"  # Owner's Drive folder
+SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_ID", "")
+BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 
 
 def _get_credentials():
     from google.oauth2.service_account import Credentials
-    scopes = [
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets",
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+
     creds_content = os.getenv("GOOGLE_CREDENTIALS_CONTENT", "")
     if creds_content and creds_content.strip().startswith("{"):
         try:
             info = json.loads(creds_content)
             return Credentials.from_service_account_info(info, scopes=scopes)
         except Exception as e:
-            print(f"[AUTH] Env credentials error: {e}")
+            print(f"[AUTH] Error: {e}")
 
     creds_file = os.getenv("GOOGLE_CREDS_JSON", "google_credentials.json")
     if os.path.exists(creds_file):
-        try:
-            return Credentials.from_service_account_file(creds_file, scopes=scopes)
-        except Exception as e:
-            print(f"[AUTH] File credentials error: {e}")
+        return Credentials.from_service_account_file(creds_file, scopes=scopes)
 
     raise Exception("Google credentials not found!")
 
 
-def _get_or_create_subfolder(service, parent_id: str, folder_name: str) -> str:
-    safe  = folder_name.replace("/", "_").replace("\\", "_")[:100]
-    query = (
-        f"name='{safe}' and "
-        f"mimeType='application/vnd.google-apps.folder' and "
-        f"'{parent_id}' in parents and trashed=false"
-    )
-    results = service.files().list(q=query, fields="files(id,name)").execute()
-    files   = results.get("files", [])
-    if files:
-        return files[0]["id"]
-    meta = {
-        "name":     safe,
-        "mimeType": "application/vnd.google-apps.folder",
-        "parents":  [parent_id],
-    }
-    folder = service.files().create(body=meta, fields="id").execute()
-    print(f"[DRIVE] Papka yaratildi: {safe}")
-    return folder["id"]
+def make_telegram_file_link(file_id: str) -> str:
+    """
+    Create a direct download link for a Telegram file.
+    Admin can open this link to download the file.
+    """
+    if not BOT_TOKEN or not file_id:
+        return ""
+    return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_id}"
 
 
-async def upload_to_drive(file_bytes: bytes, filename: str,
-                           student_name: str = "Unknown") -> str:
+async def get_telegram_file_path(bot, file_id: str) -> str:
+    """Get the actual file path from Telegram servers."""
     try:
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaIoBaseUpload
-
-        creds   = _get_credentials()
-        service = build("drive", "v3", credentials=creds)
-
-        # Create student subfolder inside owner's folder
-        student_folder = _get_or_create_subfolder(
-            service, PARENT_FOLDER_ID, student_name
-        )
-
-        mime_type, _ = mimetypes.guess_type(filename)
-        mime_type    = mime_type or "application/octet-stream"
-
-        file_meta = {"name": filename, "parents": [student_folder]}
-        media     = MediaIoBaseUpload(
-            io.BytesIO(file_bytes), mimetype=mime_type, resumable=True
-        )
-        uploaded = service.files().create(
-            body=file_meta, media_body=media, fields="id,name,webViewLink"
-        ).execute()
-
-        file_id   = uploaded["id"]
-        file_link = uploaded.get("webViewLink", "")
-
-        # Make viewable by anyone with link
-        service.permissions().create(
-            fileId=file_id,
-            body={"type": "anyone", "role": "reader"},
-        ).execute()
-
-        print(f"[DRIVE] Yuklandi: {filename} → {file_link}")
-        return file_link
-
+        tg_file = await bot.get_file(file_id)
+        return make_telegram_file_link(tg_file.file_path)
     except Exception as e:
-        print(f"[DRIVE] Xato: {e}")
-        return _local_fallback(file_bytes, filename)
+        print(f"[TELEGRAM] File path error: {e}")
+        return f"tg://file_id/{file_id}"
 
 
-def _local_fallback(file_bytes: bytes, filename: str) -> str:
-    import uuid
-    folder = "local_uploads"
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{uuid.uuid4()}_{filename}")
-    with open(path, "wb") as f:
-        f.write(file_bytes)
-    print(f"[DRIVE] Lokal saqlandi: {path}")
-    return f"local://{path}"
+# Keep upload_to_drive name for compatibility — now saves to Telegram
+async def upload_to_drive(file_bytes: bytes, filename: str,
+                           student_name: str = "Unknown",
+                           file_id: str = "") -> str:
+    """
+    Returns Telegram download link using file_id.
+    file_bytes kept for signature compatibility but not used.
+    """
+    if file_id and BOT_TOKEN:
+        link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_id}"
+        print(f"[TELEGRAM] Fayl linki yaratildi: {filename}")
+        return link
+    print(f"[TELEGRAM] file_id yo'q — link yaratilmadi")
+    return f"tg://unknown/{filename}"
 
 
 async def log_to_sheets(submission_data: dict, result: dict,
@@ -130,6 +86,7 @@ async def log_to_sheets(submission_data: dict, result: dict,
             submission_data.get("assignment_type", ""),
             submission_data.get("topic", ""),
             file_url or submission_data.get("file_url", ""),
+            submission_data.get("selfie_url", ""),
             f"{result.get('score', 0)}/{result.get('total', 10)}",
             result.get("grade", ""),
             result.get("status", ""),
@@ -164,7 +121,9 @@ def _ensure_header(service):
 
     headers = [[
         "Vaqt", "Ism Familiya", "Kurs", "Guruh", "Fan nomi",
-        "Topshiriq turi", "Mavzu", "Fayl (Drive link)",
+        "Topshiriq turi", "Mavzu",
+        "Fayl (Telegram link)",
+        "Selfi (Telegram link)",
         "Ball", "Baho", "Holat", "O'tdimi"
     ]]
     service.spreadsheets().values().update(

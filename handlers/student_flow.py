@@ -13,33 +13,33 @@ from sqlalchemy import select, func
 
 from database.db import get_session
 from database.models import Submission
-from services.drive import upload_to_drive, log_to_sheets
+from services.drive import log_to_sheets, get_telegram_file_path
 from services.face import verify_face
 from services.quiz import generate_questions
 from services.grading import calculate_grade, format_result_message
+import config
 
 router = Router()
 
 ALLOWED_EXTENSIONS  = {".pdf", ".docx", ".pptx"}
 QUESTION_TIMEOUT    = 25
 TOTAL_QUESTIONS     = 10
-QUIZ_TOTAL_TIMEOUT  = 180   # 3 daqiqa
-MAX_DAILY_ATTEMPTS  = 4     # kunlik limit
+QUIZ_TOTAL_TIMEOUT  = 180
+MAX_DAILY_ATTEMPTS  = 4
 
 
 class StudentFlow(StatesGroup):
-    choosing_type   = State()
-    entering_name   = State()
-    entering_course = State()
-    entering_group  = State()
-    entering_subject = State()   # Fan nomi — yangi
-    entering_topic  = State()
-    uploading_file  = State()
-    face_verify     = State()
-    taking_quiz     = State()
+    choosing_type    = State()
+    entering_name    = State()
+    entering_course  = State()
+    entering_group   = State()
+    entering_subject = State()
+    entering_topic   = State()
+    uploading_file   = State()
+    face_verify      = State()
+    taking_quiz      = State()
 
 
-# ── Daily limit ───────────────────────────────────────────
 async def check_daily_limit(telegram_id: int) -> int:
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     async with get_session() as session:
@@ -60,10 +60,7 @@ def _face_retry_keyboard() -> InlineKeyboardMarkup:
 
 def _share_keyboard(share_text: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="📤 Natijani ulashish",
-            switch_inline_query=share_text
-        )
+        InlineKeyboardButton(text="📤 Natijani ulashish", switch_inline_query=share_text)
     ]])
 
 
@@ -76,7 +73,6 @@ def _question_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# ── Step 1: Assignment type ───────────────────────────────
 @router.callback_query(F.data.startswith("type:"))
 async def chose_assignment_type(cb: CallbackQuery, state: FSMContext):
     count = await check_daily_limit(cb.from_user.id)
@@ -101,76 +97,56 @@ async def chose_assignment_type(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer(
         f"✅ Tanlandi: *{atype}*\n\n"
-        "Ism va familiyangizni kiriting:\n"
-        "_(Masalan: Aliyev Ali)_",
+        "Ism va familiyangizni kiriting:\n_(Masalan: Aliyev Ali)_",
         parse_mode="Markdown",
     )
     await state.set_state(StudentFlow.entering_name)
     await cb.answer()
 
 
-# ── Step 2: Name ──────────────────────────────────────────
 @router.message(StudentFlow.entering_name)
 async def got_name(msg: Message, state: FSMContext):
     name = msg.text.strip() if msg.text else ""
     if len(name.split()) < 2:
         return await msg.answer(
-            "❗ Iltimos, *ism va familiyangizni* to'liq kiriting.\n"
-            "_(Masalan: Aliyev Ali)_",
+            "❗ Iltimos, *ism va familiyangizni* to'liq kiriting.\n_(Masalan: Aliyev Ali)_",
             parse_mode="Markdown",
         )
     await state.update_data(full_name=name)
-    await msg.answer(
-        "Kurs raqamini kiriting:\n_(Masalan: 1, 2, 3 yoki 4)_",
-        parse_mode="Markdown",
-    )
+    await msg.answer("Kurs raqamini kiriting:\n_(Masalan: 1, 2, 3 yoki 4)_", parse_mode="Markdown")
     await state.set_state(StudentFlow.entering_course)
 
 
-# ── Step 3: Course ────────────────────────────────────────
 @router.message(StudentFlow.entering_course)
 async def got_course(msg: Message, state: FSMContext):
     course = msg.text.strip() if msg.text else ""
     if not course:
         return await msg.answer("❗ Kurs raqamini kiriting.")
     await state.update_data(course=course)
-    await msg.answer(
-        "Guruh nomini kiriting:\n_(Masalan: CS-101, MM-22)_",
-        parse_mode="Markdown",
-    )
+    await msg.answer("Guruh nomini kiriting:\n_(Masalan: CS-101, MM-22)_", parse_mode="Markdown")
     await state.set_state(StudentFlow.entering_group)
 
 
-# ── Step 4: Group ─────────────────────────────────────────
 @router.message(StudentFlow.entering_group)
 async def got_group(msg: Message, state: FSMContext):
     group = msg.text.strip() if msg.text else ""
     if not group:
         return await msg.answer("❗ Guruh nomini kiriting.")
     await state.update_data(group=group)
-    await msg.answer(
-        "📚 Fan nomini kiriting:\n_(Masalan: Iqtisodiyot, Menejment, Moliya)_",
-        parse_mode="Markdown",
-    )
+    await msg.answer("📚 Fan nomini kiriting:\n_(Masalan: Iqtisodiyot, Menejment)_", parse_mode="Markdown")
     await state.set_state(StudentFlow.entering_subject)
 
 
-# ── Step 5: Subject (Fan nomi) — YANGI ───────────────────
 @router.message(StudentFlow.entering_subject)
 async def got_subject(msg: Message, state: FSMContext):
     subject = msg.text.strip() if msg.text else ""
     if len(subject) < 2:
         return await msg.answer("❗ Fan nomini kiriting.")
     await state.update_data(subject=subject)
-    await msg.answer(
-        "Topshiriq mavzusini kiriting:\n"
-        "_(Masalan: Bozor iqtisodiyoti asoslari)_",
-        parse_mode="Markdown",
-    )
+    await msg.answer("Topshiriq mavzusini kiriting:", parse_mode="Markdown")
     await state.set_state(StudentFlow.entering_topic)
 
 
-# ── Step 6: Topic ─────────────────────────────────────────
 @router.message(StudentFlow.entering_topic)
 async def got_topic(msg: Message, state: FSMContext):
     topic = msg.text.strip() if msg.text else ""
@@ -186,7 +162,6 @@ async def got_topic(msg: Message, state: FSMContext):
     await state.set_state(StudentFlow.uploading_file)
 
 
-# ── Step 7: File upload ───────────────────────────────────
 @router.message(StudentFlow.uploading_file, F.document)
 async def got_file(msg: Message, state: FSMContext):
     doc      = msg.document
@@ -203,27 +178,22 @@ async def got_file(msg: Message, state: FSMContext):
         size_mb = doc.file_size / (1024 * 1024)
         return await msg.answer(
             f"❗ Fayl hajmi juda katta: *{size_mb:.1f} MB*\n"
-            f"Maksimal ruxsat etilgan hajm: *6 MB*\n\n"
-            f"Faylni kichiklashtiring va qayta yuboring.",
+            f"Maksimal: *6 MB*",
             parse_mode="Markdown",
         )
 
-    wait = await msg.answer("⏳ Fayl yuklanmoqda...")
-    try:
-        data      = await state.get_data()
-        tg_file   = await msg.bot.get_file(doc.file_id)
-        file_data = await msg.bot.download_file(tg_file.file_path)
-        # Include subject in folder name
-        folder_name = f"{data.get('full_name', 'Unknown')} — {data.get('subject', '')}"
-        drive_url = await upload_to_drive(
-            file_data.read(), filename,
-            student_name=folder_name
-        )
-        await state.update_data(file_url=drive_url)
-    except Exception as e:
-        return await wait.edit_text(f"❌ Fayl yuklanishda xato: {e}")
+    wait = await msg.answer("⏳ Fayl qabul qilinyapti...")
 
-    await wait.edit_text("✅ Fayl Google Drive ga saqlandi!")
+    # Get Telegram file link — no upload needed
+    try:
+        file_link = await get_telegram_file_path(msg.bot, doc.file_id)
+        await state.update_data(file_url=file_link, file_id=doc.file_id)
+        print(f"[TELEGRAM] Fayl qabul qilindi: {filename}")
+    except Exception as e:
+        await state.update_data(file_url=f"tg://file/{doc.file_id}", file_id=doc.file_id)
+        print(f"[TELEGRAM] Link xatosi: {e}")
+
+    await wait.edit_text("✅ Fayl qabul qilindi!")
     await state.set_state(StudentFlow.face_verify)
     await msg.answer(
         "📸 *Yuz tasdiqlash*\n\n"
@@ -243,12 +213,11 @@ async def got_file(msg: Message, state: FSMContext):
 async def file_wrong_type(msg: Message):
     await msg.answer(
         "❗ Iltimos, fayl yuboring (`.pdf`, `.docx` yoki `.pptx`).\n"
-        "Fayl hajmi maksimal *6 MB* bo'lishi kerak.",
+        "Fayl hajmi maksimal *6 MB*.",
         parse_mode="Markdown",
     )
 
 
-# ── Step 8: Face verify ───────────────────────────────────
 @router.message(StudentFlow.face_verify, F.photo)
 async def got_photo(msg: Message, state: FSMContext):
     checking = await msg.answer("⏳ Yuz tekshirilmoqda...")
@@ -264,15 +233,15 @@ async def got_photo(msg: Message, state: FSMContext):
 
     if result["verified"]:
         await checking.edit_text("✅ Yuz tasdiqlandi!")
+        # Save selfie Telegram link
         try:
-            data = await state.get_data()
-            name = f"selfie_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            folder_name = f"{data.get('full_name', 'Unknown')} — {data.get('subject', '')}"
-            url  = await upload_to_drive(img_bytes, name, student_name=folder_name)
-            await state.update_data(selfie_url=url)
+            selfie_link = await get_telegram_file_path(msg.bot, msg.photo[-1].file_id)
+            await state.update_data(selfie_url=selfie_link)
+            print(f"[TELEGRAM] Selfi linki saqlandi")
         except Exception as e:
-            print(f"[DRIVE] Selfi saqlanmadi: {e}")
-        await msg.answer("⏳ Test boshlanyapti...")
+            print(f"[TELEGRAM] Selfi link xatosi: {e}")
+
+        await msg.answer("🎯 Test boshlanyapti...")
         await state.set_state(StudentFlow.taking_quiz)
         await start_quiz(msg, state)
     else:
@@ -305,47 +274,32 @@ async def face_wrong_input(msg: Message):
     )
 
 
-# ── Quiz ──────────────────────────────────────────────────
 async def start_quiz(msg: Message, state: FSMContext):
     data  = await state.get_data()
     topic = data.get("topic", "Umumiy")
-    wait  = await msg.answer(
-        f"⏳ *{topic}* mavzusida savollar tayyorlanmoqda...",
-        parse_mode="Markdown",
-    )
+    wait  = await msg.answer(f"⏳ *{topic}* mavzusida savollar tayyorlanmoqda...", parse_mode="Markdown")
     questions = await generate_questions(topic, notify_msg=msg)
     await wait.delete()
-    await state.update_data(
-        questions=questions,
-        q_index=0,
-        correct=0,
-        wrong=0,
-        quiz_start_time=datetime.utcnow().isoformat(),
-    )
+    await state.update_data(questions=questions, q_index=0, correct=0, wrong=0,
+                             quiz_start_time=datetime.utcnow().isoformat())
     asyncio.create_task(_quiz_global_timeout(msg.chat.id, msg.bot, state))
     await send_question(msg, state)
 
 
 async def _quiz_global_timeout(chat_id: int, bot, state: FSMContext):
     await asyncio.sleep(QUIZ_TOTAL_TIMEOUT)
-    data = await state.get_data()
     current_state = await state.get_state()
     if current_state == StudentFlow.taking_quiz:
         await state.update_data(q_index=TOTAL_QUESTIONS)
         await bot.send_message(
             chat_id,
-            "⏰ *3 daqiqa vaqt tugadi!*\n\n"
-            "Siz topshiriqni bajara olmadingiz.\n"
-            "Natija: *Qoniqarsiz* ❌",
+            "⏰ *3 daqiqa vaqt tugadi!*\n\nSiz topshiriqni bajara olmadingiz.\nNatija: *Qoniqarsiz* ❌",
             parse_mode="Markdown",
         )
-
         class _FakeMsg:
             chat = type("C", (), {"id": chat_id})()
             def __init__(self): self.bot = bot
-            async def answer(self, text, **kw):
-                return await bot.send_message(chat_id, text, **kw)
-
+            async def answer(self, text, **kw): return await bot.send_message(chat_id, text, **kw)
         await finish_quiz(_FakeMsg(), state, timed_out=True)
 
 
@@ -360,16 +314,13 @@ async def send_question(msg: Message, state: FSMContext):
     opts_text = "\n".join(q["options"])
     sent = await msg.answer(
         f"❓ *Savol {idx + 1}/{TOTAL_QUESTIONS}*\n\n"
-        f"{q['question']}\n\n"
-        f"{opts_text}\n\n"
+        f"{q['question']}\n\n{opts_text}\n\n"
         f"⏱ Vaqt: {QUESTION_TIMEOUT} soniya",
         reply_markup=_question_keyboard(),
         parse_mode="Markdown",
     )
     await state.update_data(current_msg_id=sent.message_id)
-    asyncio.create_task(
-        _auto_advance(msg.chat.id, msg.bot, state, idx, sent.message_id)
-    )
+    asyncio.create_task(_auto_advance(msg.chat.id, msg.bot, state, idx, sent.message_id))
 
 
 async def _auto_advance(chat_id, bot, state, expected_idx, msg_id):
@@ -377,14 +328,9 @@ async def _auto_advance(chat_id, bot, state, expected_idx, msg_id):
     data = await state.get_data()
     if data.get("q_index") != expected_idx:
         return
-    await state.update_data(
-        q_index=expected_idx + 1,
-        wrong=data.get("wrong", 0) + 1,
-    )
+    await state.update_data(q_index=expected_idx + 1, wrong=data.get("wrong", 0) + 1)
     try:
-        await bot.edit_message_reply_markup(
-            chat_id=chat_id, message_id=msg_id, reply_markup=None
-        )
+        await bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=None)
     except Exception:
         pass
     await bot.send_message(chat_id, "⏰ Vaqt tugadi! Keyingi savol...")
@@ -392,8 +338,7 @@ async def _auto_advance(chat_id, bot, state, expected_idx, msg_id):
     class _FakeMsg:
         chat = type("C", (), {"id": chat_id})()
         def __init__(self): self.bot = bot
-        async def answer(self, text, **kw):
-            return await bot.send_message(chat_id, text, **kw)
+        async def answer(self, text, **kw): return await bot.send_message(chat_id, text, **kw)
 
     await send_question(_FakeMsg(), state)
 
@@ -429,23 +374,16 @@ async def finish_quiz(msg: Message, state: FSMContext, timed_out: bool = False):
     result  = calculate_grade(correct, TOTAL_QUESTIONS)
     student_name = data.get("full_name", "Talaba")
 
-    await msg.answer(
-        format_result_message(result, student_name),
-        parse_mode="Markdown",
-    )
+    await msg.answer(format_result_message(result, student_name), parse_mode="Markdown")
 
     if not result["passed"] or timed_out:
-        await msg.answer(
-            "📚 Ertaga yaxshilab tayyorlanib, qayta urinib ko'ring! 💪"
-        )
+        await msg.answer("📚 Ertaga yaxshilab tayyorlanib, qayta urinib ko'ring! 💪")
 
-    # Share button
     share_text = (
         f"Men @Iqtisod_Valiyev_AssistantBot da test topdirdim! "
         f"Fan: {data.get('subject', '')} | "
         f"Mavzu: {data.get('topic', '')} | "
-        f"Natija: {correct}/{TOTAL_QUESTIONS} — "
-        f"Baho: {result['grade']} ({result['status']})"
+        f"Natija: {correct}/{TOTAL_QUESTIONS} — Baho: {result['grade']} ({result['status']})"
     )
     await msg.answer(
         "Natijangizni do'stlaringiz bilan ulashing 👇",
@@ -472,12 +410,8 @@ async def finish_quiz(msg: Message, state: FSMContext, timed_out: bool = False):
     except Exception as e:
         print(f"[DB] Xato: {e}")
 
-    # Log to Sheets with subject
-    data_with_subject = dict(data)
-    await log_to_sheets(data_with_subject, result, file_url=data.get("file_url", ""))
+    # Log to Sheets with both file and selfie links
+    await log_to_sheets(data, result, file_url=data.get("file_url", ""))
 
-    await msg.answer(
-        "⏳ Natijalar saqlanmoqda...\n"
-        "✅ Saqlandi! Qayta topshirish uchun /start ni bosing."
-    )
+    await msg.answer("⏳ Natijalar saqlanmoqda...\n✅ Saqlandi! Qayta topshirish uchun /start ni bosing.")
     await state.clear()
