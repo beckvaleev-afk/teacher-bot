@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Yuz tasdiqlash</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0f0f1a;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      gap: 12px;
+    }
+    h2 { font-size: 20px; font-weight: 700; text-align: center; }
+    .subtitle { font-size: 13px; color: #8888bb; text-align: center; line-height: 1.6; }
+
+    .camera-wrap {
+      position: relative;
+      width: min(92vw, 360px);
+      aspect-ratio: 3/4;
+      border-radius: 20px;
+      overflow: hidden;
+      background: #111;
+      border: 3px solid #333366;
+      box-shadow: 0 0 40px rgba(60,60,200,0.25);
+    }
+    video {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+
+    /* Oval guide */
+    .oval-guide {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .oval {
+      width: 54%;
+      height: 68%;
+      border: 2px dashed rgba(255,255,255,0.4);
+      border-radius: 50%;
+      transition: border-color 0.3s;
+    }
+    .oval.active { border-color: #44ff88; border-style: solid; }
+
+    /* Big countdown in center */
+    .big-count {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 100px;
+      font-weight: 900;
+      color: #fff;
+      text-shadow: 0 0 30px rgba(100,200,255,0.8);
+      pointer-events: none;
+    }
+
+    /* Status bar at bottom of camera */
+    .cam-status {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 10px;
+      background: rgba(0,0,0,0.55);
+      text-align: center;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    #start-btn {
+      width: min(92vw, 360px);
+      padding: 16px;
+      font-size: 17px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #3344ff, #6622cc);
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    #start-btn:disabled { opacity: 0.4; cursor: default; }
+    #start-btn:active:not(:disabled) { transform: scale(0.97); }
+
+    #global-status {
+      font-size: 13px;
+      text-align: center;
+      color: #8888bb;
+      min-height: 18px;
+    }
+    .err  { color: #ff6666; }
+    .ok   { color: #66ff99; }
+    .info { color: #66aaff; }
+
+    canvas { display: none; }
+    .tip { font-size: 11px; color: #44445a; text-align: center; }
+  </style>
+</head>
+<body>
+  <h2>📸 Yuz tasdiqlash</h2>
+  <p class="subtitle">Kameraga qarab turing<br>va tugmani bosing</p>
+
+  <div class="camera-wrap">
+    <video id="vid" autoplay playsinline muted></video>
+    <div class="oval-guide"><div class="oval" id="oval"></div></div>
+    <div class="big-count" id="bigCount"></div>
+    <div class="cam-status" id="camStatus">Kamera yoqilmoqda...</div>
+  </div>
+
+  <div id="global-status" class="info"></div>
+
+  <button id="start-btn" disabled onclick="startLiveness()">
+    👁 Kameraga qarab turing (3 soniya)
+  </button>
+
+  <p class="tip">Real vaqtda tekshiriladi • Galereya yuklanmaydi</p>
+  <canvas id="cv"></canvas>
+
+  <script>
+    const tg       = window.Telegram.WebApp;
+    const vid      = document.getElementById('vid');
+    const cv       = document.getElementById('cv');
+    const btn      = document.getElementById('start-btn');
+    const bigCount = document.getElementById('bigCount');
+    const camSt    = document.getElementById('camStatus');
+    const oval     = document.getElementById('oval');
+    const gSt      = document.getElementById('global-status');
+
+    tg.ready();
+    tg.expand();
+
+    // ── Start camera ─────────────────────────────────────
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 852 } },
+      audio: false
+    }).then(stream => {
+      vid.srcObject = stream;
+      btn.disabled  = false;
+      camSt.textContent = 'Kamera tayyor';
+      setG('Tayyor. Tugmani bosing.', 'info');
+    }).catch(err => {
+      camSt.textContent = 'Kamera ochilmadi';
+      setG('Kamera xatosi: ' + err.message, 'err');
+      // Fallback message for PC
+      btn.textContent = '⚠️ Kamera ishlamadi — rasm yuboring';
+      btn.disabled = false;
+      btn.onclick = () => {
+        tg.sendData(JSON.stringify({ action: 'use_photo_mode' }));
+      };
+    });
+
+    // ── Liveness: 3s countdown then auto-capture ─────────
+    function startLiveness() {
+      btn.disabled = true;
+      oval.classList.add('active');
+      bigCount.style.display = 'flex';
+
+      let count = 3;
+      bigCount.textContent = count;
+      camSt.textContent    = 'Kameraga qarab turing...';
+      setG('Harakatlanmang...', 'info');
+
+      const timer = setInterval(() => {
+        count--;
+        if (count > 0) {
+          bigCount.textContent = count;
+        } else {
+          clearInterval(timer);
+          bigCount.style.display = 'none';
+          oval.classList.remove('active');
+          captureAndSend();
+        }
+      }, 1000);
+    }
+
+    // ── Capture single frame and send ────────────────────
+    function captureAndSend() {
+      camSt.textContent = 'Rasm olinmoqda...';
+      setG('Tahlil qilinmoqda...', 'info');
+
+      cv.width  = vid.videoWidth  || 640;
+      cv.height = vid.videoHeight || 852;
+
+      const ctx = cv.getContext('2d');
+      // Mirror to match display
+      ctx.translate(cv.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(vid, 0, 0);
+
+      cv.toBlob(blob => {
+        if (!blob) {
+          camSt.textContent = 'Xato';
+          setG('Rasm olinmadi. Qayta urinib koʻring.', 'err');
+          btn.disabled = false;
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          camSt.textContent = '✅ Yuborilmoqda...';
+          setG('Bot ga yuborilmoqda...', 'ok');
+          setTimeout(() => {
+            tg.sendData(JSON.stringify({
+              action: 'face_verify',
+              selfie: reader.result   // base64 JPEG
+            }));
+          }, 400);
+        };
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.88);
+    }
+
+    function setG(msg, cls) {
+      gSt.textContent = msg;
+      gSt.className   = cls || '';
+    }
+  </script>
+</body>
+</html>
