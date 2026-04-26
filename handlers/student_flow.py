@@ -228,18 +228,11 @@ async def got_photo(msg: Message, state: FSMContext):
 
     if age > 60:
         return await msg.answer(
-            "⏰ *Rasm juda eski!*
-
-"
-            f"Siz {int(age)} soniya oldin olingan rasm yubordingiz.
-
-"
-            "Iltimos, *hozir* yangi selfi oling va yuboring\.
-"
-            "📱 Telefon: 📎 → Camera
-"
-            "💻 Kompyuter: 📎 → Photo → webcam",
-            parse_mode="Markdown",
+            "Rasm juda eski!\n\n"
+            f"Siz {int(age)} soniya oldin olingan rasm yubordingiz.\n\n"
+            "Iltimos, hozir yangi selfi oling va yuboring.\n"
+            "Telefon: Rasm tugmasi → Camera\n"
+            "Kompyuter: Fayl tugmasi → Photo → webcam",
         )
 
     checking = await msg.answer("⏳ Yuz tekshirilmoqda...")
