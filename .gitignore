@@ -1,0 +1,22 @@
+﻿# Virtual environment
+venv/
+
+# Secrets
+.env
+token.json
+client_secrets.json
+google_credentials.json
+
+# Database
+teacher_bot.db
+
+# Uploads
+local_uploads/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# ZIP files
+*.zip
