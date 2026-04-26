@@ -220,6 +220,28 @@ async def file_wrong_type(msg: Message):
 
 @router.message(StudentFlow.face_verify, F.photo)
 async def got_photo(msg: Message, state: FSMContext):
+    # Check photo is taken within last 60 seconds
+    import time
+    photo_time = msg.date.timestamp() if msg.date else 0
+    now        = time.time()
+    age        = now - photo_time
+
+    if age > 60:
+        return await msg.answer(
+            "⏰ *Rasm juda eski!*
+
+"
+            f"Siz {int(age)} soniya oldin olingan rasm yubordingiz.
+
+"
+            "Iltimos, *hozir* yangi selfi oling va yuboring\.
+"
+            "📱 Telefon: 📎 → Camera
+"
+            "💻 Kompyuter: 📎 → Photo → webcam",
+            parse_mode="Markdown",
+        )
+
     checking = await msg.answer("⏳ Yuz tekshirilmoqda...")
     try:
         photo     = msg.photo[-1]
