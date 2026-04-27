@@ -19,9 +19,9 @@ async def cmd_start(msg: Message, state: FSMContext):
     await state.clear()
     name = msg.from_user.first_name or "Talaba"
     text = (
-        f"Assalomu alaykum, *{name}* 👋\n\n"
-        f"Valiev\\_Teacher Assistant Botga xush kelibsiz\\.\n"
-        f"Siz bu bot orqali fanlardan vazifalarni topshirishingiz mumkin\\!\n\n"
+        f"Assalomu alaykum, {name} 👋\n\n"
+        f"Valiev Teacher Assistant Botga xush kelibsiz.\n"
+        f"Siz bu bot orqali fanlardan vazifalarni topshirishingiz mumkin!\n\n"
         f"Quyidagi topshiriq turlaridan birini tanlang:"
     )
-    await msg.answer(text, reply_markup=main_menu_keyboard(), parse_mode="MarkdownV2")
+    await msg.answer(text, reply_markup=main_menu_keyboard())
