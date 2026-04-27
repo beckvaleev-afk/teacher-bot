@@ -199,8 +199,14 @@ async def _fetch_from_gemini(topic: str) -> list:
 
             questions = json.loads(raw)
             if isinstance(questions, list) and len(questions) >= 5:
-                print(f"[QUIZ] {model} — {len(questions[:10])} savol: '{topic}'")
-                return questions[:10]
+                # Add 2 random fallback questions to Gemini questions
+                import random
+                extra = random.sample(FALLBACK_QUESTIONS, 2)
+                combined = questions[:10] + extra
+                random.shuffle(combined)
+                final = combined[:10]
+                print(f"[QUIZ] {model} — {len(final)} savol (Gemini+fallback): '{topic}'")
+                return final
 
         except Exception as e:
             err = str(e)
