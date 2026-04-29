@@ -25,7 +25,8 @@ ALLOWED_EXTENSIONS  = {".pdf", ".docx", ".pptx"}
 QUESTION_TIMEOUT    = 25
 TOTAL_QUESTIONS     = 10
 QUIZ_TOTAL_TIMEOUT  = 180
-MAX_DAILY_ATTEMPTS  = 4
+MAX_DAILY_ATTEMPTS    = 3     # kunlik limit
+WAIT_MINUTES          = 15    # urinishlar orasidagi kutish (daqiqa)
 
 
 class StudentFlow(StatesGroup):
@@ -40,16 +41,27 @@ class StudentFlow(StatesGroup):
     taking_quiz      = State()
 
 
-async def check_daily_limit(telegram_id: int) -> int:
+async def check_daily_limit(telegram_id: int) -> dict:
+    """Returns count of today submissions and last submission time."""
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     async with get_session() as session:
-        result = await session.execute(
+        count_result = await session.execute(
             select(func.count(Submission.id)).where(
                 Submission.telegram_id == telegram_id,
                 Submission.created_at  >= today_start,
             )
         )
-        return result.scalar() or 0
+        count = count_result.scalar() or 0
+
+        last_result = await session.execute(
+            select(Submission.created_at).where(
+                Submission.telegram_id == telegram_id,
+                Submission.created_at  >= today_start,
+            ).order_by(Submission.created_at.desc()).limit(1)
+        )
+        last_time = last_result.scalar()
+
+    return {"count": count, "last_time": last_time}
 
 
 def _face_retry_keyboard() -> InlineKeyboardMarkup:
@@ -75,7 +87,11 @@ def _question_keyboard() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data.startswith("type:"))
 async def chose_assignment_type(cb: CallbackQuery, state: FSMContext):
-    count = await check_daily_limit(cb.from_user.id)
+    info = await check_daily_limit(cb.from_user.id)
+    count     = info["count"]
+    last_time = info["last_time"]
+
+    # Kunlik limit tekshiruvi
     if count >= MAX_DAILY_ATTEMPTS:
         await cb.message.edit_reply_markup(reply_markup=None)
         await cb.message.answer(
@@ -86,6 +102,30 @@ async def chose_assignment_type(cb: CallbackQuery, state: FSMContext):
         )
         await cb.answer()
         return
+
+    # Urinishlar orasidagi kutish tekshiruvi (1 va 2-urinish uchun)
+    if count >= 1 and last_time:
+        from datetime import timezone
+        now = datetime.utcnow()
+        # Make both naive for comparison
+        if last_time.tzinfo is not None:
+            last_naive = last_time.replace(tzinfo=None)
+        else:
+            last_naive = last_time
+        elapsed_minutes = (now - last_naive).total_seconds() / 60
+        remaining = WAIT_MINUTES - elapsed_minutes
+        if remaining > 0:
+            mins = int(remaining)
+            secs = int((remaining - mins) * 60)
+            await cb.message.edit_reply_markup(reply_markup=None)
+            await cb.message.answer(
+                f"⏳ *Kutish vaqti tugmagan!*\n\n"
+                f"Keyingi urinish uchun *{mins} daqiqa {secs} soniya* kutish kerak.\n\n"
+                f"Sabr qiling! 🕐",
+                parse_mode="Markdown",
+            )
+            await cb.answer()
+            return
 
     atype_map = {
         "independent": "Mustaqil ish",
@@ -195,7 +235,7 @@ async def got_file(msg: Message, state: FSMContext):
 
     await wait.edit_text("✅ Fayl qabul qilindi!")
     await state.set_state(StudentFlow.face_verify)
-    await msg.answer(
+    face_msg = await msg.answer(
         "📸 *Yuz tasdiqlash*\n\n"
         "Selfi rasmingizni yuboring:\n\n"
         "📱 *Telefon:* 📎 → Camera → rasm oling\n"
@@ -207,6 +247,7 @@ async def got_file(msg: Message, state: FSMContext):
         "• Faqat siz bo'ling",
         parse_mode="Markdown",
     )
+    await state.update_data(face_request_msg_id=face_msg.message_id)
 
 
 @router.message(StudentFlow.uploading_file)
@@ -220,19 +261,16 @@ async def file_wrong_type(msg: Message):
 
 @router.message(StudentFlow.face_verify, F.photo)
 async def got_photo(msg: Message, state: FSMContext):
-    # Check photo is taken within last 60 seconds
-    import time
-    photo_time = msg.date.timestamp() if msg.date else 0
-    now        = time.time()
-    age        = now - photo_time
+    # Check photo message_id is newer than file upload message
+    data = await state.get_data()
+    last_bot_msg_id = data.get("face_request_msg_id", 0)
 
-    if age > 60:
+    if msg.message_id <= last_bot_msg_id:
         return await msg.answer(
             "Rasm juda eski!\n\n"
-            f"Siz {int(age)} soniya oldin olingan rasm yubordingiz.\n\n"
             "Iltimos, hozir yangi selfi oling va yuboring.\n"
-            "Telefon: Rasm tugmasi → Camera\n"
-            "Kompyuter: Fayl tugmasi → Photo → webcam",
+            "Telefon: 📎 → Camera\n"
+            "Kompyuter: 📎 → Photo → webcam",
         )
 
     checking = await msg.answer("⏳ Yuz tekshirilmoqda...")
