@@ -22,9 +22,9 @@ import config
 router = Router()
 
 ALLOWED_EXTENSIONS  = {".pdf", ".docx", ".pptx"}
-QUESTION_TIMEOUT    = 25
+QUESTION_TIMEOUT    = 30
 TOTAL_QUESTIONS     = 10
-QUIZ_TOTAL_TIMEOUT  = 180
+QUIZ_TOTAL_TIMEOUT  = 360   # 6 daqiqa
 MAX_DAILY_ATTEMPTS    = 3     # kunlik limit
 WAIT_MINUTES          = 15    # urinishlar orasidagi kutish (daqiqa)
 
