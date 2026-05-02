@@ -8,12 +8,10 @@ router = Router()
 
 # ── Maintenance mode ──────────────────────────────────────
 # Set to True to pause bot, False to enable
-MAINTENANCE_MODE = False
+MAINTENANCE_MODE = True
 MAINTENANCE_TEXT = (
-    "🔧 *Texnik tanaffus*\n\n"
-    "Savollar bazasi yangilanyapti.\n"
-    "Ertaga qayta urinib ko'ring!\n\n"
-    "Noqulaylik uchun uzr so'raymiz. 🙏"
+    "Botning topshiriqlarni qabul qilish muddati yakunlandi, "
+    "shu vaqtgacha topshirmaganlar o'zimcha uchrashib topshiring!"
 )
 
 
@@ -58,5 +56,5 @@ async def toggle_maintenance(msg: Message):
         return
     await msg.answer(
         "Maintenance rejimini o'zgartirish uchun:\n\n"
-        "start.py da `MAINTENANCE_MODE = False/False` ni o'zgartiring."
+        "start.py da `MAINTENANCE_MODE = True/False` ni o'zgartiring."
     )
