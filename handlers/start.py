@@ -11,7 +11,7 @@ router = Router()
 MAINTENANCE_MODE = True
 MAINTENANCE_TEXT = (
     "Botning topshiriqlarni qabul qilish muddati yakunlandi, "
-    "shu vaqtgacha topshirmaganlar o'zimcha uchrashib topshiring!"
+    "shu vaqtgacha topshirmaganlar o'zimga uchrashib topshiring!"
 )
 
 
